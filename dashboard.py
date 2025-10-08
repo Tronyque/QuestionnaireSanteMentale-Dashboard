@@ -12,7 +12,7 @@ st.set_page_config(
     page_icon="🌸",
 )
 
-# --- EN-TÊTE ---
+# --- STYLE PERSONNALISÉ ---
 st.markdown(
     """
     <style>
@@ -37,9 +37,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# --- EN-TÊTE ---
 st.title("📊 Tableau de bord — Questionnaire Bien-être au travail")
 st.caption("Suivi global du ressenti des professionnels des EHPAD 🌱")
 
+# --- API BACKEND ---
 API_URL = "https://questionnairesantementale.onrender.com"
 
 # --- CHARGEMENT DES STATISTIQUES ---
@@ -59,90 +61,122 @@ def load_stats():
 
 df = load_stats()
 
-# --- SI VIDE ---
+# --- SI AUCUNE DONNÉE ---
 if df.empty:
     st.warning("Aucune donnée à afficher. Complétez d’abord le questionnaire.")
     st.stop()
 
-# --- SCORE GLOBAL ---
-global_mean = df["moyenne"].mean()
-global_color = "#2ecc71" if global_mean >= 4 else "#f39c12" if global_mean >= 3 else "#e74c3c"
+# --- NORMALISATION 1–10 ---
+def detect_max_scale(section: str):
+    """Déduit l’échelle d’origine selon la section"""
+    if section in ["Efficacité personnelle"]:
+        return 4
+    elif section in ["Énergie et engagement"]:
+        return 7
+    else:
+        return 5
 
-st.markdown("### 🌿 Indice global de bien-être")
-st.progress(min(global_mean / 5, 1))
+def normalize_score(row):
+    """Convertit la moyenne de chaque section sur une échelle 1–10"""
+    max_scale = detect_max_scale(row["section"])
+    return 1 + (row["moyenne"] - 1) * (9 / (max_scale - 1))
+
+df["score_10"] = df.apply(normalize_score, axis=1)
+
+# --- COULEUR DYNAMIQUE ---
+def score_to_color(score):
+    """Dégradé rouge → jaune → vert"""
+    if score <= 3:
+        return "#e74c3c"  # rouge
+    elif score <= 6:
+        return "#f1c40f"  # jaune
+    else:
+        return "#2ecc71"  # vert
+
+df["couleur"] = df["score_10"].apply(score_to_color)
+
+# --- SCORE GLOBAL ---
+global_mean = df["score_10"].mean()
+global_color = score_to_color(global_mean)
+
+st.markdown("### 🌿 Indice global de bien-être (normalisé 1–10)")
+st.progress(min(global_mean / 10, 1))
 st.markdown(
-    f"<h2 style='text-align:center; color:{global_color};'>"
-    f"{global_mean:.2f} / 5</h2>",
+    f"<h2 style='text-align:center; color:{global_color};'>{global_mean:.2f} / 10</h2>",
     unsafe_allow_html=True,
 )
 
-# --- INDICATEURS CLÉS ---
+# --- MÉTRIQUES CLÉS ---
 col1, col2, col3 = st.columns(3)
 col1.metric("🌞 Sections évaluées", f"{len(df)}")
 col2.metric("👥 Réponses totales", f"{df['nb_reponses'].sum()}")
-col3.metric(
-    "📅 Dernière mise à jour",
-    datetime.now().strftime("%d/%m/%Y à %H:%M"),
-)
+col3.metric("📅 Dernière mise à jour", datetime.now().strftime("%d/%m/%Y à %H:%M"))
 
 st.markdown("---")
 
-# --- GRAPHIQUE RADAR ---
-st.subheader("🕸️ Profil global par dimension")
-df["couleur"] = df["moyenne"].apply(
-    lambda s: "#2ecc71" if s >= 4 else "#f39c12" if s >= 3 else "#e74c3c"
-)
+# --- RADAR SUR ÉCHELLE 1–10 ---
+st.subheader("🕸️ Profil global par dimension (échelle 1–10)")
 
 radar_fig = px.line_polar(
     df,
-    r="moyenne",
+    r="score_10",
     theta="section",
     line_close=True,
-    range_r=[0, 5],
+    range_r=[0, 10],
     color_discrete_sequence=["#1b4332"],
     template="plotly_white",
 )
 radar_fig.add_trace(
     px.scatter_polar(
         df,
-        r="moyenne",
+        r="score_10",
         theta="section",
         color="couleur",
         color_discrete_map="identity",
         size=[12] * len(df),
     ).data[0]
 )
-radar_fig.update_traces(fill="toself", hovertemplate="%{theta}: %{r:.2f}/5")
+radar_fig.update_traces(fill="toself", hovertemplate="%{theta}: %{r:.2f}/10")
 radar_fig.update_layout(
     polar=dict(
-        radialaxis=dict(visible=True, range=[0, 5], showline=True, gridcolor="#ddd"),
-        angularaxis=dict(tickfont=dict(size=11, color="#1b4332")),
+        radialaxis=dict(visible=True, range=[0, 10], tickfont=dict(size=10)),
+        angularaxis=dict(tickfont=dict(size=11)),
     ),
     margin=dict(l=40, r=40, t=20, b=20),
     showlegend=False,
 )
 st.plotly_chart(radar_fig, use_container_width=True)
 
-# --- BAR CHART ---
-st.markdown("### 📈 Scores moyens par section")
+# --- LÉGENDE VISUELLE ---
+st.markdown(
+    """
+    <div style='text-align:center; margin-top:-10px; margin-bottom:25px;'>
+        <div style='display:inline-flex; align-items:center;'>
+            <div style='width:200px; height:15px; background: linear-gradient(to right, #e74c3c, #f1c40f, #2ecc71); border-radius:5px; margin-right:10px;'></div>
+            <span style='font-size:0.9rem; color:#333;'>1–3 : Faible &nbsp; | &nbsp; 4–6 : Moyen &nbsp; | &nbsp; 7–10 : Élevé</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-df_sorted = df.sort_values("moyenne", ascending=True)
+# --- BARRES SUR 1–10 ---
+st.markdown("### 📈 Scores normalisés par section (1–10)")
+
+df_sorted = df.sort_values("score_10", ascending=True)
 
 bar_chart = (
     alt.Chart(df_sorted)
     .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
     .encode(
-        x=alt.X(
-            "moyenne:Q",
-            title="Score moyen (1–5)",
-            scale=alt.Scale(domain=[0, 5]),
-        ),
+        x=alt.X("score_10:Q", title="Score normalisé (1–10)", scale=alt.Scale(domain=[0, 10])),
         y=alt.Y("section:N", sort="-x", title=""),
-        color=alt.Color("moyenne:Q", scale=alt.Scale(scheme="greens")),
+        color=alt.Color("score_10:Q", scale=alt.Scale(scheme="redyellowgreen")),
         tooltip=[
             alt.Tooltip("section", title="Section"),
-            alt.Tooltip("moyenne", title="Score moyen", format=".2f"),
-            alt.Tooltip("nb_reponses", title="Nombre de réponses"),
+            alt.Tooltip("moyenne", title="Moyenne originale", format=".2f"),
+            alt.Tooltip("score_10", title="Score 1–10", format=".2f"),
+            alt.Tooltip("nb_reponses", title="Réponses"),
         ],
     )
     .properties(height=420)
@@ -150,13 +184,13 @@ bar_chart = (
 st.altair_chart(bar_chart, use_container_width=True)
 
 st.caption(
-    "💡 Ces scores représentent les moyennes corrigées (questions inversées incluses). "
-    "Ils sont calculés en temps réel à partir des réponses enregistrées."
+    "💡 Ces scores sont normalisés sur 1–10 pour permettre la comparaison entre les sections "
+    "(quelle que soit leur échelle d’origine). Les couleurs reflètent la satisfaction perçue : "
+    "rouge = faible, jaune = moyen, vert = élevé."
 )
 
-st.markdown("---")
-
 # --- EXPORT CSV ---
+st.markdown("---")
 st.subheader("📦 Export des données brutes")
 st.write("Téléchargez les réponses complètes au format CSV pour analyse ou archivage.")
 
